@@ -189,6 +189,20 @@ async function main() {
   );
   if (unregisteredUtxos.length > 0) {
     console.log(`  Registering ${unregisteredUtxos.length} NIGHT UTXOs for DUST generation...`);
+    // Wait until the NIGHT UTXOs have generated enough DUST to cover the
+    // registration fee, then register. Without this, a freshly-funded wallet
+    // has 0 dust and the registration fails with
+    // "Insufficient generated dust to cover registration fee". This is the
+    // SDK-documented pair: estimateRegistration → waitForGeneratedDust →
+    // registerNightUtxosForDustGeneration.
+    const { fee: dustRegistrationFee } = await walletCtx.wallet.estimateRegistration(
+      unregisteredUtxos,
+    );
+    console.log(`  DUST registration fee: ${dustRegistrationFee.toLocaleString()}`);
+    console.log('  Waiting for generated DUST to cover the fee...');
+    await walletCtx.wallet.waitForGeneratedDust(unregisteredUtxos, dustRegistrationFee, {
+      timeoutMs: 600_000,
+    });
     // The signDustRegistration callback (3rd arg) already produces a recipe
     // with N signatures matching N inputs. Do NOT call signRecipe again — that
     // would double-sign and the chain rejects with InputsSignaturesLengthMismatch

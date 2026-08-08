@@ -19,9 +19,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "frontend:install": "npm --prefix frontend install",
-    "frontend:dev": "npm --prefix frontend run dev",
-    "frontend:build": "npm --prefix frontend run build",
-    "frontend:preview": "npm --prefix frontend run preview"
+    "frontend:dev": "npm run frontend:sync-circuit && npm --prefix frontend run dev",
+    "frontend:build": "npm run frontend:sync-circuit && npm --prefix frontend run build",
+    "frontend:preview": "npm --prefix frontend run preview",
+    "frontend:sync-circuit": "node scripts/sync-circuit.mjs"
   },
   "dependencies": {
     "@midnight-ntwrk/compact-runtime": "0.16.0",
@@ -49,5 +50,16 @@
   "engines": {
     "node": ">=22.0.0"
   },
-  "keywords": ["midnight", "blockchain", "zero-knowledge", "privacy", "student", "eligibility", "sppu"]
+  "keywords": [
+    "midnight",
+    "blockchain",
+    "zero-knowledge",
+    "privacy",
+    "student",
+    "eligibility",
+    "sppu"
+  ],
+  "overrides": {
+    "@midnight-ntwrk/onchain-runtime-v3": "3.0.0"
+  }
 }

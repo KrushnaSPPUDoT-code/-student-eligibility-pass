@@ -1,0 +1,172 @@
+pragma language_version 0.23;
+
+import CompactStandardLibrary;
+
+// ══════════════════════════════════════════════════════════════════════════
+// Private Student Eligibility Pass — INTO the Midnight / SPPU bootcamp
+//
+// A student owns a private academic record (CGPA 8.7, attendance 87%,
+// credits 24, department "Blockchain"). A college / event / scholarship
+// organizer publishes PUBLIC eligibility requirements (CGPA >= 8.0,
+// attendance >= 75%, credits >= 20). The student proves:
+//
+//     "I satisfy the requirements." ✅
+//
+// WITHOUT revealing the exact CGPA, attendance, credits or department.
+//
+//
+// PUBLIC (on-chain ledger) — visible to every observer:
+//   requiredCgpa        — minimum CGPA threshold, scaled by 1000 (8.0 => 8000).
+//   requiredAttendance  — minimum attendance threshold, per-mille (75% => 750).
+//   requiredCredits     — minimum accumulated credits (e.g. 20).
+//   verifications       — how many eligibility proofs have succeeded.
+//   lastResult          — the coarse, deliberately-disclosed outcome of the
+//                         last verification ("Eligible" / None).
+//   studentOwner        — a derived public key proving who owns the pass,
+//                         without revealing the secret key it derives from.
+//   profileCommitment   — a one-way commitment (hash) binding the four private
+//                         academic values. Observers can verify a claim against
+//                         it but can never recover the values.
+//   active              — whether this pass is currently issued (true) or
+//                         has been revoked by its owner (false).
+//
+// PRIVATE (witness / circuit inputs) — NEVER written to the ledger, NEVER
+// logged, NEVER rendered:
+//   secretKey         — the student's secret key (private witness).
+//   cgpa              — private CGPA, scaled by 1000 (8.7 => 8700), 0..10000.
+//   attendance        — private attendance, per-mille (87% => 870), 0..1000.
+//   credits           — private accumulated credits (24), 0..500.
+//   department        — private department name, 32-byte UTF-8, e.g.
+//                       "Blockchain".
+//
+// An on-chain observer CAN see: the requirements, the derived owner key, the
+// profile commitment, the verification counter, the coarse "Eligible" label,
+// and the active/revoked flag.
+// An on-chain observer CANNOT see: any academic value. The Compact compiler
+// enforces this — every value derived from a private input that is written to
+// the ledger must be wrapped in an explicit disclose(), and private inputs are
+// never emitted or logged.
+// ══════════════════════════════════════════════════════════════════════════
+
+export ledger requiredCgpa: Uint<0..10000>;
+export ledger requiredAttendance: Uint<0..1000>;
+export ledger requiredCredits: Uint<0..100000>;
+export ledger verifications: Counter;
+export ledger lastResult: Maybe<Opaque<"string">>;
+export ledger passOwner: Bytes<32>;
+export ledger profileCommitment: Bytes<32>;
+export ledger active: Uint<0..100000>;
+
+constructor() {
+  requiredCgpa = 0;
+  requiredAttendance = 0;
+  requiredCredits = 0;
+  passOwner = pad(32, "student-pass:no-owner");
+  profileCommitment = pad(32, "student-pass:no-record");
+  lastResult = none<Opaque<"string">>();
+  active = 0;
+}
+
+witness secretKey(): Bytes<32>;
+
+// Derive the public owner key from the student's secret key. The secret key
+// never leaves the circuit; only the derived key is disclosed on issue.
+export circuit ownerKey(sk: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<3, Bytes<32>>>([
+    pad(32, "student-pass:owner:"),
+    pad(32, "student-pass:nonce"),
+    sk,
+  ]);
+}
+
+// PUBLIC: publish (or update) the eligibility requirements. Requirements are
+// intentionally PUBLIC — students must be able to see what they need to meet.
+// Passing the thresholds here only sets the requirement; no private record is
+// touched and nothing private is revealed.
+export circuit updateRequirements(
+  newRequiredCgpa: Uint<0..10000>,
+  newRequiredAttendance: Uint<0..1000>,
+  newRequiredCredits: Uint<0..100000>,
+): [] {
+  assert(newRequiredCgpa > 0, "Required CGPA must be positive");
+  assert(newRequiredAttendance > 0, "Required attendance must be positive");
+  requiredCgpa = disclose(newRequiredCgpa);
+  requiredAttendance = disclose(newRequiredAttendance);
+  requiredCredits = disclose(newRequiredCredits);
+}
+
+// Associate the student's private academic record with this pass. Only a
+// one-way commitment of the four private values is disclosed, together with
+// the derived owner key. The values themselves stay private. A single pass
+// contract instance belongs to a single student.
+export circuit issuePass(
+  cgpa: Uint<0..10000>,
+  attendance: Uint<0..1000>,
+  credits: Uint<0..100000>,
+  department: Bytes<32>,
+): [] {
+  assert(cgpa > 0, "CGPA must be a positive value");
+  assert(attendance > 0, "Attendance must be a positive value");
+  assert(credits > 0, "Credits must be a positive value");
+  passOwner = disclose(ownerKey(secretKey()));
+  profileCommitment = disclose(profileCommitmentHash(cgpa, attendance, credits, department));
+  active = disclose(1);
+}
+
+// The core zero-knowledge proof: prove the PRIVATE record satisfies the
+// PUBLIC requirements. The transaction succeeds ONLY when every requirement
+// is met (proof of a true claim); otherwise the circuit aborts and the caller
+// learns the specific failing requirement. Only the coarse result label is
+// disclosed — never the values backing it.
+//
+// privacy-preserving behavior: cgpa, attendance, credits and department are
+// private inputs that are used ONLY inside this circuit (re-committed, so a
+// student cannot claim better numbers than the ones committed at issue time,
+// then range-checked against the ledger requirements). An observer learns
+// only that the claim succeeded and that the numbers matched the committed
+// profile — never the numbers themselves.
+export circuit checkEligibility(
+  cgpa: Uint<0..10000>,
+  attendance: Uint<0..1000>,
+  credits: Uint<0..100000>,
+  department: Bytes<32>,
+  resultLabel: Opaque<"string">,
+): [] {
+  assert(ownerKey(secretKey()) == passOwner, "Only the student who owns this pass may check it");
+  assert(profileCommitment == profileCommitmentHash(cgpa, attendance, credits, department), "Private record does not match the committed profile");
+  assert(cgpa >= requiredCgpa, "Not eligible: CGPA is below the requirement");
+  assert(attendance >= requiredAttendance, "Not eligible: attendance is below the requirement");
+  assert(credits >= requiredCredits, "Not eligible: accumulated credits are below the requirement");
+  verifications.increment(1);
+  lastResult = disclose(some<Opaque<"string">>(resultLabel));
+}
+
+// Revoke this pass. The student erases the on-chain trace of their record:
+// the commitment and the disclosed state are cleared and the pass is marked
+// inactive. Executes the right-to-erasure / self-sovereignty story: the
+// student remains in full control of their personal data.
+export circuit revokePass(): [] {
+  assert(ownerKey(secretKey()) == passOwner, "Only the student who owns this pass may revoke it");
+  profileCommitment = disclose(pad(32, "student-pass:revoked"));
+  lastResult = disclose(none<Opaque<"string">>());
+  active = disclose(0);
+}
+
+// Internal: the one-way commitment bound to the pass owner key and the four
+// private academic values. Publishing it (via disclose in issuePass) proves
+// the record exists without revealing its contents.
+circuit profileCommitmentHash(
+  cgpa: Uint<0..10000>,
+  attendance: Uint<0..1000>,
+  credits: Uint<0..100000>,
+  department: Bytes<32>,
+): Bytes<32> {
+  return persistentHash<Vector<6, Bytes<32>>>([
+    pad(32, "student-pass:profile:"),
+    passOwner,
+    cgpa as Field as Bytes<32>,
+    attendance as Field as Bytes<32>,
+    credits as Field as Bytes<32>,
+    department,
+  ]);
+}

@@ -46,7 +46,15 @@ npm test                   # circuit unit tests
 npm run setup              # configures the funded wallet of the deployer
 npm run deploy             # prints the contract address
 ```
+### Deployed Contract
 
+| Network | Contract Address |
+|---|---|
+| Midnight Preview | `7cddac5d8b0eb3332c51e0e94f55add1237b86576f3103e6c1949d0a54106fd0` |
+
+**Deployment Date:** 8 August 2026
+
+This contract is deployed on the Midnight Preview network and is used by the Student Eligibility Pass application.
 Copy the printed `contract_id` into `frontend/.env.local`:
 
 ```
